@@ -1,80 +1,81 @@
-import { z } from 'zod';
-import { insertDiagnosticSchema, insertBatteryLogSchema, diagnosticResults, batteryLogs } from './schema';
+import type { Express } from "express";
+import type { Server } from "http";
+import { storage } from "./storage";
+import { api } from "@shared/routes";
+import { z } from "zod";
 
-// ============================================
-// SHARED ERROR SCHEMAS
-// ============================================
-export const errorSchemas = {
-  validation: z.object({
-    message: z.string(),
-    field: z.string().optional(),
-  }),
-  notFound: z.object({
-    message: z.string(),
-  }),
-  internal: z.object({
-    message: z.string(),
-  }),
-};
+export async function registerRoutes(
+  httpServer: Server,
+  app: Express
+): Promise<Server> {
 
-// ============================================
-// API CONTRACT
-// ============================================
-export const api = {
-  diagnostics: {
-    list: {
-      method: 'GET' as const,
-      path: '/api/diagnostics',
-      responses: {
-        200: z.array(z.custom<typeof diagnosticResults.$inferSelect>()),
-      },
-    },
-    create: {
-      method: 'POST' as const,
-      path: '/api/diagnostics',
-      input: insertDiagnosticSchema,
-      responses: {
-        201: z.custom<typeof diagnosticResults.$inferSelect>(),
-        400: errorSchemas.validation,
-      },
-    },
-  },
-  batteryLogs: {
-    list: {
-      method: 'GET' as const,
-      path: '/api/battery-logs',
-      responses: {
-        200: z.array(z.custom<typeof batteryLogs.$inferSelect>()),
-      },
-    },
-    create: {
-      method: 'POST' as const,
-      path: '/api/battery-logs',
-      input: insertBatteryLogSchema,
-      responses: {
-        201: z.custom<typeof batteryLogs.$inferSelect>(),
-        400: errorSchemas.validation,
-      },
-    },
-  },
-};
+  // --- Diagnostics Routes ---
+  app.get(api.diagnostics.list.path, async (req, res) => {
+    const results = await storage.getDiagnosticResults();
+    res.json(results);
+  });
 
-export function buildUrl(path: string, params?: Record<string, string | number>): string {
-  let url = path;
-  if (params) {
-    Object.entries(params).forEach(([key, value]) => {
-      if (url.includes(`:${key}`)) {
-        url = url.replace(`:${key}`, String(value));
+  app.post(api.diagnostics.create.path, async (req, res) => {
+    try {
+      const input = api.diagnostics.create.input.parse(req.body);
+      const result = await storage.createDiagnosticResult(input);
+      res.status(201).json(result);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({
+          message: err.errors[0].message,
+          field: err.errors[0].path.join('.'),
+        });
       }
-    });
-  }
-  return url;
+      throw err;
+    }
+  });
+
+  // --- Battery Logs Routes ---
+  app.get(api.batteryLogs.list.path, async (req, res) => {
+    const logs = await storage.getBatteryLogs();
+    res.json(logs);
+  });
+
+  app.post(api.batteryLogs.create.path, async (req, res) => {
+    try {
+      const input = api.batteryLogs.create.input.parse(req.body);
+      const log = await storage.createBatteryLog(input);
+      res.status(201).json(log);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({
+          message: err.errors[0].message,
+          field: err.errors[0].path.join('.'),
+        });
+      }
+      throw err;
+    }
+  });
+
+  // --- Seed Data ---
+  await seedDatabase();
+
+  return httpServer;
 }
 
-// ============================================
-// TYPE HELPERS
-// ============================================
-export type CreateDiagnosticInput = z.infer<typeof api.diagnostics.create.input>;
-export type DiagnosticListResponse = z.infer<typeof api.diagnostics.list.responses[200]>;
-export type CreateBatteryLogInput = z.infer<typeof api.batteryLogs.create.input>;
-export type BatteryLogListResponse = z.infer<typeof api.batteryLogs.list.responses[200]>;
+async function seedDatabase() {
+  const existingDiagnostics = await storage.getDiagnosticResults();
+  if (existingDiagnostics.length === 0) {
+    // Seed some initial diagnostic history
+    await storage.createDiagnosticResult({
+      toolName: "System Initialization",
+      status: "pass",
+      details: "Initial system check completed successfully"
+    });
+  }
+
+  const existingBatteryLogs = await storage.getBatteryLogs();
+  if (existingBatteryLogs.length === 0) {
+    // Seed some battery data for the graph
+    await storage.createBatteryLog({ level: "85", isCharging: false });
+    await storage.createBatteryLog({ level: "84", isCharging: false });
+    await storage.createBatteryLog({ level: "82", isCharging: false });
+    await storage.createBatteryLog({ level: "80", isCharging: false });
+  }
+}
