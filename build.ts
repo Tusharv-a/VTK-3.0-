@@ -1,3 +1,4 @@
+import process from "node:process";
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
 import { rm, readFile } from "fs/promises";
